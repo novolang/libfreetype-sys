@@ -1,0 +1,479 @@
+// The C entry points of libfreetype, one novo-lang declaration each.
+//
+// A pointer is an `Int`: the C API hands out opaque handles for the
+// library, the face, the size, the glyph slot and the character map,
+// and this module carries each of them as the address the C library
+// returned.  Zero is the null pointer.
+//
+// An out-parameter is the address of a slot the caller owns.  Every
+// entry point that produces a handle writes it into one, because what
+// comes back is the error code instead.  `ptr.alloc_word` reserves a
+// slot and `ptr.read_word` reads it back.
+//
+// FreeType answers almost everything through a structure rather than
+// through a return value: a face's metrics, a glyph's metrics, the
+// rendered bitmap and the outline are all fields of a record the
+// library owns.  The handle is the address of that record, and the
+// caller reads a field at its byte offset.  The README's "The rules a
+// user needs" section carries the offsets this package promises.
+//
+// A field narrower than eight bytes is read out of the word that
+// contains it.  `ptr.read_word` loads eight bytes; mask off the width
+// of the field, and sign-extend by hand when the C type is signed.
+//
+// A C `int` return arrives in 32 bits.  FreeType's error codes are
+// positive, so the usual sign-extension trap does not bite here, but
+// `FT_Outline_Get_Orientation` and the fixed-point calls answer signed
+// values that do need `as i32` before a comparison with a negative
+// number.
+//
+// The effect row says where the call goes.  A face keeps its font file
+// open for its whole life and reads glyph and table data out of it on
+// demand, so the entry points that pull data through a face carry
+// `[io, ffi]`.  The entry points that touch only memory the caller
+// already holds — the outline helpers, the bitmap helpers, the
+// character map lookups and the fixed-point arithmetic — carry `[ffi]`
+// alone.
+//
+// `FT_Outline_Decompose` is not here.  It takes an `FT_Outline_Funcs`
+// structure whose four members are C FUNCTION POINTERS, and a
+// novo-lang program cannot produce one.  The README's "What is not
+// included" section lists it with the rest.
+
+// Initialise the FreeType library.
+//
+// `alibrary` is the address of an eight-byte slot the handle is
+// written into.  Answers 0 on success, and a positive error code
+// otherwise.  Nothing else in this module may be called before this
+// call succeeds.
+pub @ffi(library = "freetype", symbol = "FT_Init_FreeType")
+fn ft_init_freetype(alibrary: Int) -> Int [ffi]
+
+// Release the FreeType library and everything still open under it.
+//
+// Every face, size and outline created from this library becomes
+// invalid.  Answers 0 on success.
+pub @ffi(library = "freetype", symbol = "FT_Done_FreeType")
+fn ft_done_freetype(library: Int) -> Int [ffi]
+
+// Read the version of the library into three caller-owned slots.
+//
+// `amajor`, `aminor` and `apatch` are addresses of slots, each of
+// which receives a C `int` in its low four bytes.  The answer is the
+// version of the shared object that was loaded, which is not
+// necessarily the version the program was built against.
+pub @ffi(library = "freetype", symbol = "FT_Library_Version")
+fn ft_library_version(library: Int, amajor: Int, aminor: Int, apatch: Int) [ffi]
+
+// Get the text for an error code.
+//
+// The answer is the address of a static string the library owns, or 0.
+// FreeType builds the table only when it was compiled with
+// `FT_CONFIG_OPTION_ERROR_STRINGS`, and the Debian and Ubuntu builds
+// are not, so this call answers 0 there for every code.  Treat a 0 as
+// "this build has no table", not as "the code is unknown".
+pub @ffi(library = "freetype", symbol = "FT_Error_String")
+fn ft_error_string(error_code: Int) -> Int [ffi]
+
+// Set a property on one of the library's driver modules.
+//
+// `module_name` is a driver name such as `"truetype"` or `"cff"`,
+// `property_name` is the property, and `value` is the address of the
+// value to read it from — a slot holding a C `int` for the numeric
+// properties.  Answers 0 on success, 6 when the module is unknown and
+// 3 when the property is.
+pub @ffi(library = "freetype", symbol = "FT_Property_Set")
+fn ft_property_set(library: Int, module_name: Str, property_name: Str, value: Int) -> Int [ffi]
+
+// Open a font file and create a face from one of the fonts in it.
+//
+// `filepathname` is the path, `face_index` selects the font when the
+// file holds several, and -1 asks only for the number of faces without
+// creating one.  `aface` is the address of a slot the face handle is
+// written into.  Answers 0 on success, 1 when the file cannot be
+// opened, and 2 when it is not a font this build can read.  The file
+// stays open for the life of the face.
+pub @ffi(library = "freetype", symbol = "FT_New_Face")
+fn ft_new_face(library: Int, filepathname: Str, face_index: Int, aface: Int) -> Int [io, ffi]
+
+// Create a face from a font already in memory.
+//
+// `file_base` and `file_size` are the address and the length of the
+// bytes, and the caller must keep them alive and unchanged for the
+// life of the face — FreeType does not copy them.  The remaining
+// arguments are those of `FT_New_Face`.  This call touches no file.
+pub @ffi(library = "freetype", symbol = "FT_New_Memory_Face")
+fn ft_new_memory_face(library: Int, file_base: Int, file_size: Int, face_index: Int,
+                      aface: Int) -> Int [ffi]
+
+// Release a face, and close the font file it was opened from.
+//
+// A face is reference counted: this call drops one reference and frees
+// the face when the last one goes.  Answers 0 on success.
+pub @ffi(library = "freetype", symbol = "FT_Done_Face")
+fn ft_done_face(face: Int) -> Int [io, ffi]
+
+// Take one more reference to a face.
+//
+// The face then needs one more `FT_Done_Face` than it would otherwise.
+// Answers 0 on success.
+pub @ffi(library = "freetype", symbol = "FT_Reference_Face")
+fn ft_reference_face(face: Int) -> Int [ffi]
+
+// Get the PostScript name of a face.
+//
+// The answer is the address of a string the face owns, or 0 when the
+// font records no PostScript name.  Read it with `ptr.read_str` and do
+// not free it.
+pub @ffi(library = "freetype", symbol = "FT_Get_Postscript_Name")
+fn ft_get_postscript_name(face: Int) -> Int [ffi]
+
+// Select a character map on a face by its encoding.
+//
+// `encoding` is a four-byte tag: 1970170211 is `FT_ENCODING_UNICODE`,
+// which is `"unic"` read as a big-endian number.  Answers 0 on
+// success, and 6 when the face carries no map with that encoding.
+pub @ffi(library = "freetype", symbol = "FT_Select_Charmap")
+fn ft_select_charmap(face: Int, encoding: Int) -> Int [ffi]
+
+// Select a character map on a face by its handle.
+//
+// `charmap` is one of the addresses in the face's `charmaps` array.
+// Answers 0 on success, and 6 when the map does not belong to this
+// face.
+pub @ffi(library = "freetype", symbol = "FT_Set_Charmap")
+fn ft_set_charmap(face: Int, charmap: Int) -> Int [ffi]
+
+// Get the glyph index a character code maps to.
+//
+// The lookup goes through the face's currently selected character map.
+// Answers 0 when the map has no entry, and glyph 0 is the font's
+// substitute glyph rather than an error.
+pub @ffi(library = "freetype", symbol = "FT_Get_Char_Index")
+fn ft_get_char_index(face: Int, charcode: Int) -> Int [ffi]
+
+// Get the glyph index a glyph name maps to.
+//
+// Answers 0 when the face has no glyph with that name, and 0 as well
+// when the face carries no glyph names at all.
+pub @ffi(library = "freetype", symbol = "FT_Get_Name_Index")
+fn ft_get_name_index(face: Int, glyph_name: Str) -> Int [io, ffi]
+
+// Write a glyph's name into a caller-owned buffer.
+//
+// `buffer` is the address of `buffer_max` bytes, and the name arrives
+// null-terminated.  Answers 0 on success, and 6 when the face carries
+// no glyph names.  Ask `FT_Has_PS_Glyph_Names` first.
+pub @ffi(library = "freetype", symbol = "FT_Get_Glyph_Name")
+fn ft_get_glyph_name(face: Int, glyph_index: Int, buffer: Int, buffer_max: Int) -> Int [io, ffi]
+
+// Get the first character code the selected character map covers.
+//
+// `agindex` is the address of a slot the glyph index is written into,
+// in its low four bytes.  Answers the character code, and 0 with a
+// glyph index of 0 when the map is empty.
+pub @ffi(library = "freetype", symbol = "FT_Get_First_Char")
+fn ft_get_first_char(face: Int, agindex: Int) -> Int [ffi]
+
+// Get the next character code after `char_code`.
+//
+// `agindex` is the address of a slot for the glyph index.  Answers 0
+// with a glyph index of 0 when the walk is over, which is how the loop
+// started by `FT_Get_First_Char` ends.
+pub @ffi(library = "freetype", symbol = "FT_Get_Next_Char")
+fn ft_get_next_char(face: Int, char_code: Int, agindex: Int) -> Int [ffi]
+
+// Set the character size of a face, in points and at a resolution.
+//
+// `char_width` and `char_height` are in 26.6 fixed point, which is the
+// size in points multiplied by 64, and a 0 for either means "the same
+// as the other".  `horz_resolution` and `vert_resolution` are in dots
+// per inch, and a 0 for either means 72.  Answers 0 on success, and 23
+// when the face has no scalable outlines and no strike of that size.
+pub @ffi(library = "freetype", symbol = "FT_Set_Char_Size")
+fn ft_set_char_size(face: Int, char_width: Int, char_height: Int, horz_resolution: Int,
+                    vert_resolution: Int) -> Int [io, ffi]
+
+// Set the character size of a face, in whole pixels.
+//
+// A 0 for either dimension means "the same as the other".  This is
+// `FT_Set_Char_Size` with the resolution already applied.
+pub @ffi(library = "freetype", symbol = "FT_Set_Pixel_Sizes")
+fn ft_set_pixel_sizes(face: Int, pixel_width: Int, pixel_height: Int) -> Int [io, ffi]
+
+// Set the character size of a face from a request structure.
+//
+// `req` is the address of a 32-byte record the caller lays out: a
+// four-byte request type at offset 0, a 26.6 width at 8, a 26.6 height
+// at 16, and two four-byte resolutions at 24 and 28.  The request
+// types are 0 for the nominal size, 1 for the real dimension, 2 for
+// the bounding box, 3 for the cell and 4 for a strike index.
+pub @ffi(library = "freetype", symbol = "FT_Request_Size")
+fn ft_request_size(face: Int, req: Int) -> Int [io, ffi]
+
+// Select one of a face's fixed strike sizes by index.
+//
+// `strike_index` indexes the face's `available_sizes` array.  Answers
+// 0 on success and 23 when the face has no such strike.
+pub @ffi(library = "freetype", symbol = "FT_Select_Size")
+fn ft_select_size(face: Int, strike_index: Int) -> Int [io, ffi]
+
+// Set the transformation applied to every glyph loaded afterwards.
+//
+// `matrix` is the address of a 32-byte record of four 16.16 fixed
+// point numbers in the order xx, xy, yx, yy, and `delta` is the
+// address of a 16-byte record of two 26.6 numbers.  A 0 for either
+// argument leaves that half alone: 0 for both restores the identity.
+pub @ffi(library = "freetype", symbol = "FT_Set_Transform")
+fn ft_set_transform(face: Int, matrix: Int, delta: Int) [ffi]
+
+// Load one glyph into the face's glyph slot.
+//
+// `load_flags` is a bit set: 0 is `FT_LOAD_DEFAULT`, 1 loads without
+// scaling and gives font units, 2 skips the hinter, 4 renders in the
+// same call and 8 skips the bitmap strikes.  The slot is the address
+// at offset 152 of the face, and every later load overwrites it.
+// Answers 0 on success and 6 when the glyph index is out of range.
+pub @ffi(library = "freetype", symbol = "FT_Load_Glyph")
+fn ft_load_glyph(face: Int, glyph_index: Int, load_flags: Int) -> Int [io, ffi]
+
+// Load the glyph a character code maps to.
+//
+// This is `FT_Get_Char_Index` followed by `FT_Load_Glyph`.  A
+// character the map does not cover loads glyph 0 rather than failing.
+pub @ffi(library = "freetype", symbol = "FT_Load_Char")
+fn ft_load_char(face: Int, char_code: Int, load_flags: Int) -> Int [io, ffi]
+
+// Rasterise the outline in a glyph slot into the slot's bitmap.
+//
+// `render_mode` is 0 for eight-bit grey, 1 for one bit per pixel, 2
+// and 3 for the horizontal and vertical subpixel modes and 5 for the
+// signed distance field.  Answers 0 on success, and 6 when the slot
+// holds no outline.  The bitmap is at offset 152 of the slot.
+pub @ffi(library = "freetype", symbol = "FT_Render_Glyph")
+fn ft_render_glyph(slot: Int, render_mode: Int) -> Int [ffi]
+
+// Get the kerning between two glyphs.
+//
+// `kern_mode` is 0 for a scaled 26.6 answer, 1 for a scaled answer
+// rounded to whole pixels and 2 for unscaled font units.  `akerning`
+// is the address of a 16-byte record the x and y are written into.
+// Answers 0 on success, and writes two zeroes when the face carries no
+// kerning table.
+pub @ffi(library = "freetype", symbol = "FT_Get_Kerning")
+fn ft_get_kerning(face: Int, left_glyph: Int, right_glyph: Int, kern_mode: Int,
+                  akerning: Int) -> Int [io, ffi]
+
+// Get one glyph's advance width without loading the glyph.
+//
+// `padvance` is the address of a slot the advance is written into, in
+// 16.16 fixed point, or in font units when `load_flags` carries the
+// no-scale bit.  This is faster than a load when the outline is not
+// wanted.
+pub @ffi(library = "freetype", symbol = "FT_Get_Advance")
+fn ft_get_advance(face: Int, gindex: Int, load_flags: Int, padvance: Int) -> Int [io, ffi]
+
+// Create an empty outline with room for a number of points and
+// contours.
+//
+// `anoutline` is the address of a 40-byte record the caller owns and
+// this call fills in.  The outline must be released with
+// `FT_Outline_Done` and the same library handle.
+pub @ffi(library = "freetype", symbol = "FT_Outline_New")
+fn ft_outline_new(library: Int, num_points: Int, num_contours: Int, anoutline: Int) -> Int [ffi]
+
+// Release an outline created by `FT_Outline_New`.
+//
+// The library handle must be the one the outline was created with.
+// An outline that belongs to a glyph slot is the slot's and is not
+// released here.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Done")
+fn ft_outline_done(library: Int, outline: Int) -> Int [ffi]
+
+// Copy one outline into another.
+//
+// The target must already have exactly as many points and contours as
+// the source, which is what `FT_Outline_New` with the source's counts
+// gives.  Answers 6 when the counts differ.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Copy")
+fn ft_outline_copy(source: Int, target: Int) -> Int [ffi]
+
+// Move every point of an outline by a fixed offset.
+//
+// `x_offset` and `y_offset` are in the outline's own units, which are
+// 26.6 for a scaled outline and font units for an unscaled one.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Translate")
+fn ft_outline_translate(outline: Int, x_offset: Int, y_offset: Int) [ffi]
+
+// Apply a 2x2 matrix to every point of an outline.
+//
+// `matrix` is the address of a 32-byte record of four 16.16 fixed
+// point numbers in the order xx, xy, yx, yy.  The translation is a
+// separate step: use `FT_Outline_Translate` after this call.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Transform")
+fn ft_outline_transform(outline: Int, matrix: Int) [ffi]
+
+// Thicken an outline by moving its points outwards.
+//
+// `strength` is in 26.6 units and the outline grows by it in both
+// directions, so a glyph gets `strength` wider and `strength` taller.
+// The outline must be oriented correctly or the effect is inverted.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Embolden")
+fn ft_outline_embolden(outline: Int, strength: Int) -> Int [ffi]
+
+// Thicken an outline by a different amount in each direction.
+//
+// `x_strength` and `y_strength` are in 26.6 units, and either may be
+// 0.  `FT_Outline_Embolden` is this call with the same strength twice.
+pub @ffi(library = "freetype", symbol = "FT_Outline_EmboldenXY")
+fn ft_outline_embolden_xy(outline: Int, x_strength: Int, y_strength: Int) -> Int [ffi]
+
+// Reverse the direction every contour of an outline is drawn in.
+//
+// This flips which side of a contour is the inside, which is the
+// difference between the TrueType and the PostScript fill rules.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Reverse")
+fn ft_outline_reverse(outline: Int) [ffi]
+
+// Get the control box of an outline.
+//
+// `acbox` is the address of a 32-byte record receiving xMin, yMin,
+// xMax and yMax in that order.  The control box encloses the control
+// points as well as the curve, so it is never smaller than the exact
+// bounding box and is much cheaper to compute.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Get_CBox")
+fn ft_outline_get_cbox(outline: Int, acbox: Int) [ffi]
+
+// Get the exact bounding box of an outline.
+//
+// `abbox` is laid out as it is for `FT_Outline_Get_CBox`.  This call
+// solves the curves rather than enclosing their control points, so the
+// box is the smallest one the glyph fits in.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Get_BBox")
+fn ft_outline_get_bbox(outline: Int, abbox: Int) -> Int [ffi]
+
+// Get the fill orientation of an outline.
+//
+// Answers 1 when the outline is filled clockwise, which is the
+// TrueType convention, 2 when it is filled counter-clockwise, which is
+// the PostScript one, and 0 when the outline is empty.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Get_Orientation")
+fn ft_outline_get_orientation(outline: Int) -> Int [ffi]
+
+// Check that an outline's contents are consistent.
+//
+// Answers 0 when the point count, the contour count and the contour
+// end indices agree with one another, and 6 when they do not.  This is
+// the check to run on an outline the program built itself.
+pub @ffi(library = "freetype", symbol = "FT_Outline_Check")
+fn ft_outline_check(outline: Int) -> Int [ffi]
+
+// Zero a 40-byte bitmap record the caller owns.
+//
+// Every bitmap the caller passes to `FT_Bitmap_Copy` or
+// `FT_Bitmap_Convert` as a target must be initialised by this call
+// first, or the library reads uninitialised bytes as an existing
+// buffer.
+pub @ffi(library = "freetype", symbol = "FT_Bitmap_Init")
+fn ft_bitmap_init(abitmap: Int) [ffi]
+
+// Copy one bitmap into another, allocating the target's buffer.
+//
+// The target must have been initialised by `FT_Bitmap_Init`, and it
+// must be released by `FT_Bitmap_Done` with the same library handle.
+pub @ffi(library = "freetype", symbol = "FT_Bitmap_Copy")
+fn ft_bitmap_copy(library: Int, source: Int, target: Int) -> Int [ffi]
+
+// Convert a bitmap to eight bits per pixel.
+//
+// `alignment` is the byte alignment of each row of the target, and 1
+// gives rows with no padding.  The target's values are 0 and 1 for a
+// monochrome source, not 0 and 255, so a caller that wants grey scales
+// them itself.
+pub @ffi(library = "freetype", symbol = "FT_Bitmap_Convert")
+fn ft_bitmap_convert(library: Int, source: Int, target: Int, alignment: Int) -> Int [ffi]
+
+// Thicken a bitmap in place.
+//
+// `x_strength` and `y_strength` are in 26.6 units.  The bitmap grows
+// by them, and its buffer is reallocated, so the caller re-reads the
+// row count, the width and the buffer address afterwards.
+pub @ffi(library = "freetype", symbol = "FT_Bitmap_Embolden")
+fn ft_bitmap_embolden(library: Int, bitmap: Int, x_strength: Int, y_strength: Int) -> Int [ffi]
+
+// Release a bitmap's buffer and zero the record.
+//
+// The library handle must be the one that allocated the buffer.  A
+// bitmap that belongs to a glyph slot is the slot's and is not
+// released here.
+pub @ffi(library = "freetype", symbol = "FT_Bitmap_Done")
+fn ft_bitmap_done(library: Int, bitmap: Int) -> Int [ffi]
+
+// Read one SFNT table, or ask how long it is.
+//
+// `tag` is the four-byte table tag read as a big-endian number, and 0
+// asks for the whole font file.  With `buffer` 0 the length is written
+// into the slot at `length` and nothing is copied; with a buffer, at
+// most `length` bytes from `offset` are copied into it.  Answers 8
+// when the face is not an SFNT face and 138 when the table is absent.
+pub @ffi(library = "freetype", symbol = "FT_Load_Sfnt_Table")
+fn ft_load_sfnt_table(face: Int, tag: Int, offset: Int, buffer: Int, length: Int) -> Int [io, ffi]
+
+// Get the tag and length of one of a face's SFNT tables by index.
+//
+// `tag` and `length` are addresses of slots.  With `tag` 0 the number
+// of tables is written into the slot at `length` instead.  Answers 8
+// when the face is not an SFNT face.
+pub @ffi(library = "freetype", symbol = "FT_Sfnt_Table_Info")
+fn ft_sfnt_table_info(face: Int, table_index: Int, tag: Int, length: Int) -> Int [io, ffi]
+
+// Get how many name strings a face's `name` table holds.
+//
+// Answers 0 for a face that is not an SFNT face, which is the same
+// answer as an SFNT face with an empty table.
+pub @ffi(library = "freetype", symbol = "FT_Get_Sfnt_Name_Count")
+fn ft_get_sfnt_name_count(face: Int) -> Int [io, ffi]
+
+// Read one of a face's name strings into a caller-owned record.
+//
+// `aname` is the address of a 24-byte record receiving four two-byte
+// identifiers — platform, encoding, language and name — then the
+// address of the bytes at offset 8 and their length at offset 16.  The
+// bytes belong to the face and are NOT null-terminated, and their
+// encoding is whatever the platform and encoding identifiers say.
+pub @ffi(library = "freetype", symbol = "FT_Get_Sfnt_Name")
+fn ft_get_sfnt_name(face: Int, idx: Int, aname: Int) -> Int [io, ffi]
+
+// Multiply two numbers where the second is 16.16 fixed point.
+//
+// This is the scaling step FreeType itself uses: a font unit times a
+// scale from the size metrics gives a 26.6 coordinate.  The
+// multiplication is done in 64 bits and rounded.
+pub @ffi(library = "freetype", symbol = "FT_MulFix")
+fn ft_mul_fix(a: Int, b: Int) -> Int [ffi]
+
+// Divide two numbers and answer the quotient in 16.16 fixed point.
+//
+// The division is done in 64 bits and rounded.
+pub @ffi(library = "freetype", symbol = "FT_DivFix")
+fn ft_div_fix(a: Int, b: Int) -> Int [ffi]
+
+// Multiply two numbers and divide by a third, in 64 bits.
+//
+// The intermediate product does not overflow, and the result is
+// rounded.  This is how a caller scales a coordinate by a ratio
+// without losing the low bits.
+pub @ffi(library = "freetype", symbol = "FT_MulDiv")
+fn ft_mul_div(a: Int, b: Int, c: Int) -> Int [ffi]
+
+// Round a 16.16 fixed point number to the nearest whole unit.
+pub @ffi(library = "freetype", symbol = "FT_RoundFix")
+fn ft_round_fix(a: Int) -> Int [ffi]
+
+// Round a 16.16 fixed point number up to a whole unit.
+pub @ffi(library = "freetype", symbol = "FT_CeilFix")
+fn ft_ceil_fix(a: Int) -> Int [ffi]
+
+// Round a 16.16 fixed point number down to a whole unit.
+pub @ffi(library = "freetype", symbol = "FT_FloorFix")
+fn ft_floor_fix(a: Int) -> Int [ffi]

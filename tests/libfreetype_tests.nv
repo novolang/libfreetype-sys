@@ -1,0 +1,581 @@
+// API tests for the libfreetype bindings.
+//
+// Every test below calls into the C library, so the suite needs
+// libfreetype installed and linked.  `novo pkg build` type-checks the
+// declarations without it; `novo test` runs them and does not.
+//
+// The suite carries its own font as hex.  It is a 776-byte TrueType
+// font built for these tests with three glyphs — the substitute glyph,
+// a square mapped from U+0041 and a triangle mapped from U+0042 — and
+// it is loaded from memory, so every test but one reads and writes
+// nothing.  The one that does writes a file that is NOT a font under
+// `/tmp`, to see the error a face reports for it, and deletes it
+// again.
+
+use std.test
+use std.fs
+use libfreetype
+
+// The test font, 776 bytes of TrueType.
+const FONT_HEX: Str = "00010000000a0080000300204f532f325e67557a000000ac00000060636d6170000c00750000010c0000002c676c79661c7a10a300000138000000446865616461da43a20000017c000000366868656105de022a000001b400000024686d7478083400fa000001d80000000c6c6f636100000068000001e4000000106d61787000050006000001f4000000206e616d650db51ccd00000214000000ba706f73744b62ad78000002d000000038000402580190000500000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000004e4f564f0040004100420320ff3800c8032000c8000000010000000001f4019000000000000000000001000300010000000c00040020000000040004000100000042ffff00000041ffffffc0000100000000000100640000025802bc0003000001010101006401f40000fe0c0000000002bc00000000000100320000028a02bc0002000001010100320258fed40000000002bc00000000010000000100001dabaa095f0f3cf5000b03e80000000000000000000000000000000000320000028a02bc000000080002000100000000000100000320ff38000002bc00320032028a00010000000000000000000000000000000302bc006402bc006402bc00320000000000000000000000240000004400010000000300040001000000000002000000000000000000000000000000000000000400360003000104090001001e00000003000104090002000e001e0003000104090004002e002c0003000104090006002a005a004e006f0076006f0020005300680065006c0066002000540065007300740052006500670075006c00610072004e006f0076006f0020005300680065006c00660020005400650073007400200052006500670075006c00610072004e006f0076006f005300680065006c00660054006500730074002d0052006500670075006c0061007200000002000000000000ff9c0032000000000000000000000000000000000000000000030000010201030673717561726508747269616e676c65"
+
+// The length of the test font in bytes.
+const FONT_LEN: Int = 776
+
+// The path the one filesystem test writes a file that is not a font to.
+const NOT_A_FONT_FILE: Str = "/tmp/novo-libfreetype-sys-not-a-font.txt"
+
+// `FT_ENCODING_UNICODE`, the tag `"unic"` read as a big-endian number.
+const ENCODING_UNICODE: Int = 1970170211
+
+// `FT_LOAD_DEFAULT`.
+const LOAD_DEFAULT: Int = 0
+
+// `FT_LOAD_NO_SCALE`: answer in font units and do not scale.
+const LOAD_NO_SCALE: Int = 1
+
+// `FT_RENDER_MODE_NORMAL`, eight bits of grey per pixel.
+const RENDER_NORMAL: Int = 0
+
+// `FT_PIXEL_MODE_GRAY`, the pixel mode `FT_RENDER_MODE_NORMAL` produces.
+const PIXEL_MODE_GRAY: Int = 2
+
+// `FT_KERNING_DEFAULT`, a scaled and grid-fitted 26.6 answer.
+const KERNING_DEFAULT: Int = 0
+
+// The offsets this suite reads out of an `FT_FaceRec`.
+const FACE_NUM_FACES: Int = 0
+const FACE_NUM_GLYPHS: Int = 32
+const FACE_FAMILY_NAME: Int = 40
+const FACE_STYLE_NAME: Int = 48
+const FACE_NUM_CHARMAPS: Int = 72
+const FACE_CHARMAPS: Int = 80
+const FACE_BBOX: Int = 104
+const FACE_UNITS_PER_EM: Int = 136
+const FACE_GLYPH: Int = 152
+const FACE_SIZE: Int = 160
+
+// The offsets this suite reads out of an `FT_GlyphSlotRec`.
+const SLOT_GLYPH_INDEX: Int = 24
+const SLOT_METRICS: Int = 48
+const SLOT_LINEAR_HORI_ADVANCE: Int = 112
+const SLOT_ADVANCE: Int = 128
+const SLOT_BITMAP: Int = 152
+const SLOT_BITMAP_LEFT: Int = 192
+const SLOT_BITMAP_TOP: Int = 196
+const SLOT_OUTLINE: Int = 200
+
+// The offsets this suite reads out of an `FT_Size_Metrics`, which sits
+// at offset 24 of an `FT_SizeRec`.
+const SIZE_METRICS: Int = 24
+const METRICS_X_SCALE: Int = 8
+const METRICS_HEIGHT: Int = 40
+
+// The sizes of the records the caller lays out.
+const OUTLINE_SIZE: Int = 40
+const BITMAP_SIZE: Int = 40
+const BBOX_SIZE: Int = 32
+const VECTOR_SIZE: Int = 16
+const MATRIX_SIZE: Int = 32
+const SFNT_NAME_SIZE: Int = 24
+
+// `FT_MAKE_TAG('c','m','a','p')`.
+const TAG_CMAP: Int = 1668112752
+
+// The bytes of the test font, in a buffer the caller owns.
+fn font_buffer() -> Int
+    let buf = ptr.alloc(FONT_LEN)
+    let _ = ptr.write_bytes_buf(buf, bytes.from_hex(FONT_HEX) ?? bytes.from_str(""))
+    return buf
+
+// Read the low sixteen bits of the word at `addr`.
+fn u16_at(addr: Int) -> Int
+    return ptr.read_word(addr) & 65535
+
+// Read the low thirty-two bits of the word at `addr`.
+fn u32_at(addr: Int) -> Int
+    return ptr.read_word(addr) & 4294967295
+
+@test
+fn test_the_library_opens_reports_its_version_and_closes() [io, ffi]
+    test.case("FT_Init_FreeType, FT_Library_Version, FT_Error_String, FT_Done_FreeType")
+    let slot = ptr.alloc_word()
+    test.assert(libfreetype.ft_init_freetype(slot) == 0)
+    let lib = ptr.read_word(slot)
+    test.assert(lib != 0)
+    let major = ptr.alloc_word()
+    let minor = ptr.alloc_word()
+    let patch = ptr.alloc_word()
+    libfreetype.ft_library_version(lib, major, minor, patch)
+    test.assert(u32_at(major) == 2)
+    test.assert(u32_at(minor) >= 10)
+    test.assert(u32_at(patch) >= 0)
+    // A build without FT_CONFIG_OPTION_ERROR_STRINGS answers 0 for
+    // every code, and that is not a failure.
+    let text = libfreetype.ft_error_string(6)
+    test.assert(text >= 0)
+    test.assert(libfreetype.ft_done_freetype(lib) == 0)
+    ptr.free(patch)
+    ptr.free(minor)
+    ptr.free(major)
+    ptr.free(slot)
+
+@test
+fn test_a_driver_property_is_set_and_an_unknown_one_is_refused() [io, ffi]
+    test.case("FT_Property_Set")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let value = ptr.alloc_word()
+    // Interpreter version 35, the one TrueType hinting mode every
+    // build carries.
+    ptr.write_word(value, 35)
+    test.assert(libfreetype.ft_property_set(lib, "truetype", "interpreter-version", value) == 0)
+    // A module that is not there, and a property that is not there.
+    test.assert(libfreetype.ft_property_set(lib, "nosuchmodule", "x", value) != 0)
+    test.assert(libfreetype.ft_property_set(lib, "truetype", "nosuchproperty", value) != 0)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(value)
+    ptr.free(slot)
+
+@test
+fn test_a_face_from_memory_reports_its_own_description() [io, ffi]
+    test.case("FT_New_Memory_Face, FT_Reference_Face, FT_Get_Postscript_Name, FT_Done_Face")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    test.assert(libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot) == 0)
+    let face = ptr.read_word(fslot)
+    test.assert(face != 0)
+    test.assert(ptr.read_word(face + FACE_NUM_FACES) == 1)
+    test.assert(ptr.read_word(face + FACE_NUM_GLYPHS) == 3)
+    test.assert(ptr.read_str(ptr.read_word(face + FACE_FAMILY_NAME)) == "Novo Shelf Test")
+    test.assert(ptr.read_str(ptr.read_word(face + FACE_STYLE_NAME)) == "Regular")
+    test.assert(u16_at(face + FACE_UNITS_PER_EM) == 1000)
+    // The ascender is the next two bytes of the same word.
+    test.assert(((ptr.read_word(face + FACE_UNITS_PER_EM) >>> 16) & 65535) == 800)
+    test.assert(u32_at(face + FACE_NUM_CHARMAPS) == 1)
+    test.assert(ptr.read_word(face + FACE_CHARMAPS) != 0)
+    // The bounding box of every glyph in the font, in font units.
+    test.assert(ptr.read_word(face + FACE_BBOX) == 50)
+    test.assert(ptr.read_word(face + FACE_BBOX + 8) == 0)
+    test.assert(ptr.read_word(face + FACE_BBOX + 16) == 650)
+    test.assert(ptr.read_word(face + FACE_BBOX + 24) == 700)
+    test.assert(ptr.read_str(libfreetype.ft_get_postscript_name(face)) == "NovoShelfTest-Regular")
+    // A second reference needs a second release.
+    test.assert(libfreetype.ft_reference_face(face) == 0)
+    test.assert(libfreetype.ft_done_face(face) == 0)
+    test.assert(libfreetype.ft_done_face(face) == 0)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_face_from_a_file_reports_why_it_could_not_be_opened() [io, fs, ffi]
+    test.case("FT_New_Face")
+    // A file that is not a font, written into a temp directory.
+    let _ = fs.write(NOT_A_FONT_FILE, "this file is not a font")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let fslot = ptr.alloc_word()
+    // 1 is "cannot open resource": there is no such file.
+    test.assert(libfreetype.ft_new_face(lib, "/nonexistent/novo/font.ttf", 0, fslot) == 1)
+    // 2 is "unknown file format": the file opened and was not a font.
+    test.assert(libfreetype.ft_new_face(lib, NOT_A_FONT_FILE, 0, fslot) == 2)
+    // The same two codes come back from the memory loader, which is
+    // the path the rest of this suite takes: 6 is "invalid argument",
+    // and a font with three glyphs has no face 9.
+    let font = font_buffer()
+    test.assert(libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 9, fslot) == 6)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(font)
+    ptr.free(fslot)
+    ptr.free(slot)
+    let _ = fs.delete(NOT_A_FONT_FILE)
+
+@test
+fn test_a_character_map_maps_codes_to_glyphs_in_both_directions() [io, ffi]
+    test.case("FT_Select_Charmap, FT_Set_Charmap, FT_Get_Char_Index, FT_Get_First_Char, FT_Get_Next_Char")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    test.assert(libfreetype.ft_select_charmap(face, ENCODING_UNICODE) == 0)
+    // The face's only map, taken out of its charmaps array by hand.
+    let first_map = ptr.read_word(ptr.read_word(face + FACE_CHARMAPS))
+    test.assert(libfreetype.ft_set_charmap(face, first_map) == 0)
+    test.assert(libfreetype.ft_get_char_index(face, 65) == 1)
+    test.assert(libfreetype.ft_get_char_index(face, 66) == 2)
+    // A code the map does not cover answers the substitute glyph.
+    test.assert(libfreetype.ft_get_char_index(face, 90) == 0)
+    let gindex = ptr.alloc_word()
+    test.assert(libfreetype.ft_get_first_char(face, gindex) == 65)
+    test.assert(u32_at(gindex) == 1)
+    test.assert(libfreetype.ft_get_next_char(face, 65, gindex) == 66)
+    test.assert(u32_at(gindex) == 2)
+    // The walk ends with a code of 0 and a glyph index of 0.
+    test.assert(libfreetype.ft_get_next_char(face, 66, gindex) == 0)
+    test.assert(u32_at(gindex) == 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(gindex)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_glyph_is_named_and_found_again_by_its_name() [io, ffi]
+    test.case("FT_Get_Glyph_Name, FT_Get_Name_Index")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let name = ptr.alloc(64)
+    test.assert(libfreetype.ft_get_glyph_name(face, 1, name, 64) == 0)
+    test.assert(ptr.read_str(name) == "square")
+    test.assert(libfreetype.ft_get_glyph_name(face, 2, name, 64) == 0)
+    test.assert(ptr.read_str(name) == "triangle")
+    test.assert(libfreetype.ft_get_name_index(face, "square") == 1)
+    test.assert(libfreetype.ft_get_name_index(face, "triangle") == 2)
+    // A name the font does not carry answers the substitute glyph.
+    test.assert(libfreetype.ft_get_name_index(face, "nosuchglyph") == 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(name)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_size_is_set_four_ways_and_the_metrics_follow() [io, ffi]
+    test.case("FT_Set_Char_Size, FT_Set_Pixel_Sizes, FT_Request_Size, FT_Select_Size")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    // Sixteen points at seventy-two dots per inch is sixteen pixels.
+    test.assert(libfreetype.ft_set_char_size(face, 16 * 64, 0, 72, 0) == 0)
+    let metrics = ptr.read_word(face + FACE_SIZE) + SIZE_METRICS
+    test.assert(u16_at(metrics) == 16)
+    test.assert(ptr.read_word(metrics + METRICS_X_SCALE) > 0)
+    test.assert(ptr.read_word(metrics + METRICS_HEIGHT) > 0)
+    test.assert(libfreetype.ft_set_pixel_sizes(face, 0, 32) == 0)
+    test.assert(u16_at(metrics) == 32)
+    // The same thing again through a request record: type 0 is the
+    // nominal size, and the two resolutions are in the second half.
+    let req = ptr.alloc(32)
+    ptr.write_word(req, 0)
+    ptr.write_word(req + 8, 24 * 64)
+    ptr.write_word(req + 16, 24 * 64)
+    ptr.write_word(req + 24, 72)
+    ptr.write_i32(req + 24, 72)
+    ptr.write_i32(req + 28, 72)
+    test.assert(libfreetype.ft_request_size(face, req) == 0)
+    test.assert(u16_at(metrics) == 24)
+    // This font is scalable and carries no strikes, so there is no
+    // strike 0 to select.
+    test.assert(libfreetype.ft_select_size(face, 0) != 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(req)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_glyph_loads_with_its_metrics_and_its_outline() [io, ffi]
+    test.case("FT_Load_Char, FT_Load_Glyph, FT_Get_Advance")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let _ = libfreetype.ft_set_pixel_sizes(face, 0, 32)
+    test.assert(libfreetype.ft_load_char(face, 65, LOAD_DEFAULT) == 0)
+    let gs = ptr.read_word(face + FACE_GLYPH)
+    test.assert(u32_at(gs + SLOT_GLYPH_INDEX) == 1)
+    // The advance is the fifth of the eight metrics, and it is in 26.6
+    // units: the square is seven tenths of an em wide.
+    test.assert(ptr.read_word(gs + SLOT_METRICS + 32) == 22 * 64)
+    test.assert(ptr.read_word(gs + SLOT_ADVANCE) == 22 * 64)
+    // The unrounded advance is in 16.16 units instead.
+    test.assert(ptr.read_word(gs + SLOT_LINEAR_HORI_ADVANCE) > 22 * 65536)
+    // The outline of a square is one contour of four points.
+    let outline = gs + SLOT_OUTLINE
+    test.assert(u16_at(outline) == 1)
+    test.assert(((ptr.read_word(outline) >>> 16) & 65535) == 4)
+    // Loading by glyph index is the same load.
+    test.assert(libfreetype.ft_load_glyph(face, 2, LOAD_DEFAULT) == 0)
+    test.assert(u32_at(gs + SLOT_GLYPH_INDEX) == 2)
+    // The advance without a load, in font units.
+    let advance = ptr.alloc_word()
+    test.assert(libfreetype.ft_get_advance(face, 1, LOAD_NO_SCALE, advance) == 0)
+    test.assert(ptr.read_word(advance) == 700)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(advance)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_transform_and_a_kerning_pair_are_read_back() [io, ffi]
+    test.case("FT_Set_Transform, FT_Get_Kerning")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let _ = libfreetype.ft_set_pixel_sizes(face, 0, 32)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    let gs = ptr.read_word(face + FACE_GLYPH)
+    let plain_advance = ptr.read_word(gs + SLOT_ADVANCE)
+    let plain_metrics = ptr.read_word(gs + SLOT_METRICS + 32)
+    // Half the width, the whole height: four 16.16 numbers, xx xy yx yy.
+    let matrix = ptr.alloc(MATRIX_SIZE)
+    ptr.write_word(matrix, 32768)
+    ptr.write_word(matrix + 8, 0)
+    ptr.write_word(matrix + 16, 0)
+    ptr.write_word(matrix + 24, 65536)
+    libfreetype.ft_set_transform(face, matrix, 0)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    // Half the width halves the advance the slot reports.
+    test.assert(ptr.read_word(gs + SLOT_ADVANCE) == plain_advance / 2)
+    // The metrics are not transformed: they are the untransformed
+    // glyph's, whatever the matrix says.
+    test.assert(ptr.read_word(gs + SLOT_METRICS + 32) == plain_metrics)
+    // Two zero arguments restore the identity.
+    libfreetype.ft_set_transform(face, 0, 0)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    test.assert(ptr.read_word(gs + SLOT_ADVANCE) == plain_advance)
+    // This font carries no kerning table, so every pair is zero.
+    let kerning = ptr.alloc(VECTOR_SIZE)
+    test.assert(libfreetype.ft_get_kerning(face, 1, 2, KERNING_DEFAULT, kerning) == 0)
+    test.assert(ptr.read_word(kerning) == 0)
+    test.assert(ptr.read_word(kerning + 8) == 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(kerning)
+    ptr.free(matrix)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_an_outline_answers_its_boxes_its_orientation_and_its_check() [io, ffi]
+    test.case("FT_Outline_Get_CBox, FT_Outline_Get_BBox, FT_Outline_Get_Orientation, FT_Outline_Check")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let _ = libfreetype.ft_set_pixel_sizes(face, 0, 32)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    let outline = ptr.read_word(face + FACE_GLYPH) + SLOT_OUTLINE
+    test.assert(libfreetype.ft_outline_check(outline) == 0)
+    // A square has no curves, so its control box and its exact
+    // bounding box are the same four numbers.
+    let cbox = ptr.alloc(BBOX_SIZE)
+    let bbox = ptr.alloc(BBOX_SIZE)
+    libfreetype.ft_outline_get_cbox(outline, cbox)
+    test.assert(libfreetype.ft_outline_get_bbox(outline, bbox) == 0)
+    test.assert(ptr.read_word(cbox) == ptr.read_word(bbox))
+    test.assert(ptr.read_word(cbox + 16) == ptr.read_word(bbox + 16))
+    test.assert(ptr.read_word(cbox + 16) > ptr.read_word(cbox))
+    test.assert(ptr.read_word(cbox + 24) > ptr.read_word(cbox + 8))
+    // 1 is the TrueType fill, drawn clockwise.
+    test.assert(libfreetype.ft_outline_get_orientation(outline) == 1)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(bbox)
+    ptr.free(cbox)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_an_outline_is_created_copied_moved_and_released() [io, ffi]
+    test.case("FT_Outline_New, FT_Outline_Copy, FT_Outline_Translate, FT_Outline_Transform, FT_Outline_Embolden, FT_Outline_EmboldenXY, FT_Outline_Reverse, FT_Outline_Done")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let _ = libfreetype.ft_set_pixel_sizes(face, 0, 32)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    let source = ptr.read_word(face + FACE_GLYPH) + SLOT_OUTLINE
+    // A target with exactly the source's four points and one contour.
+    let target = ptr.alloc(OUTLINE_SIZE)
+    test.assert(libfreetype.ft_outline_new(lib, 4, 1, target) == 0)
+    test.assert(libfreetype.ft_outline_copy(source, target) == 0)
+    let box = ptr.alloc(BBOX_SIZE)
+    libfreetype.ft_outline_get_cbox(target, box)
+    let left = ptr.read_word(box)
+    // Moving the outline moves its box by the same amount.
+    libfreetype.ft_outline_translate(target, 100, 0)
+    libfreetype.ft_outline_get_cbox(target, box)
+    test.assert(ptr.read_word(box) == left + 100)
+    // Doubling the width doubles the box.
+    let width = ptr.read_word(box + 16) - ptr.read_word(box)
+    let matrix = ptr.alloc(MATRIX_SIZE)
+    ptr.write_word(matrix, 131072)
+    ptr.write_word(matrix + 8, 0)
+    ptr.write_word(matrix + 16, 0)
+    ptr.write_word(matrix + 24, 65536)
+    libfreetype.ft_outline_transform(target, matrix)
+    libfreetype.ft_outline_get_cbox(target, box)
+    test.assert(ptr.read_word(box + 16) - ptr.read_word(box) == width * 2)
+    // Emboldening grows the box in both directions.
+    let tall = ptr.read_word(box + 24) - ptr.read_word(box + 8)
+    test.assert(libfreetype.ft_outline_embolden(target, 64) == 0)
+    libfreetype.ft_outline_get_cbox(target, box)
+    test.assert(ptr.read_word(box + 24) - ptr.read_word(box + 8) > tall)
+    // The same call with a separate strength for each direction.
+    test.assert(libfreetype.ft_outline_embolden_xy(target, 64, 0) == 0)
+    // Reversing flips which side of the contour is the inside.
+    let orientation = libfreetype.ft_outline_get_orientation(target)
+    libfreetype.ft_outline_reverse(target)
+    test.assert(libfreetype.ft_outline_get_orientation(target) != orientation)
+    test.assert(libfreetype.ft_outline_done(lib, target) == 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(matrix)
+    ptr.free(box)
+    ptr.free(target)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_a_glyph_renders_to_a_grey_bitmap_that_copies_and_converts() [io, ffi]
+    test.case("FT_Render_Glyph, FT_Bitmap_Init, FT_Bitmap_Copy, FT_Bitmap_Convert, FT_Bitmap_Embolden, FT_Bitmap_Done")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    let _ = libfreetype.ft_set_pixel_sizes(face, 0, 32)
+    let _ = libfreetype.ft_load_char(face, 65, LOAD_DEFAULT)
+    let gs = ptr.read_word(face + FACE_GLYPH)
+    test.assert(libfreetype.ft_render_glyph(gs, RENDER_NORMAL) == 0)
+    let bitmap = gs + SLOT_BITMAP
+    let rows = u32_at(bitmap)
+    let width = (ptr.read_word(bitmap) >>> 32) & 4294967295
+    test.assert(rows > 0)
+    test.assert(width > 0)
+    test.assert(ptr.read_word(bitmap + 16) != 0)
+    // Pixel mode 2 is one byte of grey per pixel.
+    test.assert(((ptr.read_word(bitmap + 24) >>> 16) & 255) == PIXEL_MODE_GRAY)
+    test.assert(u32_at(gs + SLOT_BITMAP_LEFT) >= 0)
+    test.assert(u32_at(gs + SLOT_BITMAP_TOP) > 0)
+    // A copy into a record the caller owns, initialised first.
+    let copy = ptr.alloc(BITMAP_SIZE)
+    libfreetype.ft_bitmap_init(copy)
+    test.assert(libfreetype.ft_bitmap_copy(lib, bitmap, copy) == 0)
+    test.assert(u32_at(copy) == rows)
+    test.assert(libfreetype.ft_bitmap_embolden(lib, copy, 64, 0) == 0)
+    // The emboldened copy is wider, and its buffer has moved.
+    test.assert(((ptr.read_word(copy) >>> 32) & 4294967295) > width)
+    test.assert(libfreetype.ft_bitmap_done(lib, copy) == 0)
+    // A conversion to eight bits, from a bitmap that already has them.
+    let converted = ptr.alloc(BITMAP_SIZE)
+    libfreetype.ft_bitmap_init(converted)
+    test.assert(libfreetype.ft_bitmap_convert(lib, bitmap, converted, 1) == 0)
+    test.assert(u32_at(converted) == rows)
+    test.assert(libfreetype.ft_bitmap_done(lib, converted) == 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(converted)
+    ptr.free(copy)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_the_sfnt_tables_and_the_name_records_are_read_back() [io, ffi]
+    test.case("FT_Load_Sfnt_Table, FT_Sfnt_Table_Info, FT_Get_Sfnt_Name_Count, FT_Get_Sfnt_Name")
+    let slot = ptr.alloc_word()
+    let _ = libfreetype.ft_init_freetype(slot)
+    let lib = ptr.read_word(slot)
+    let font = font_buffer()
+    let fslot = ptr.alloc_word()
+    let _ = libfreetype.ft_new_memory_face(lib, font, FONT_LEN, 0, fslot)
+    let face = ptr.read_word(fslot)
+    // A null buffer asks only for the length.
+    let length = ptr.alloc_word()
+    test.assert(libfreetype.ft_load_sfnt_table(face, TAG_CMAP, 0, 0, length) == 0)
+    let cmap_len = ptr.read_word(length)
+    test.assert(cmap_len == 44)
+    // And then the bytes themselves: a format 4 subtable follows the
+    // four-byte header, so the fifth and sixth bytes are 0 and 4.
+    let table = ptr.alloc(cmap_len)
+    test.assert(libfreetype.ft_load_sfnt_table(face, TAG_CMAP, 0, table, length) == 0)
+    test.assert(bytes.to_hex(ptr.read_bytes_n(table, 4)) == "00000001")
+    // A null tag asks how many tables the font has.
+    let count = ptr.alloc_word()
+    test.assert(libfreetype.ft_sfnt_table_info(face, 0, 0, count) == 0)
+    test.assert(ptr.read_word(count) == 10)
+    // And with a tag slot, the tag and the length of one of them.
+    let tag = ptr.alloc_word()
+    test.assert(libfreetype.ft_sfnt_table_info(face, 0, tag, length) == 0)
+    test.assert(ptr.read_word(tag) != 0)
+    test.assert(ptr.read_word(length) > 0)
+    // The name table, and the first record in it.
+    test.assert(libfreetype.ft_get_sfnt_name_count(face) == 4)
+    let name = ptr.alloc(SFNT_NAME_SIZE)
+    test.assert(libfreetype.ft_get_sfnt_name(face, 0, name) == 0)
+    // Platform 3, encoding 1, language 1033, name identifier 1.
+    test.assert(u16_at(name) == 3)
+    test.assert(((ptr.read_word(name) >>> 16) & 65535) == 1)
+    // The string is UTF-16, so fifteen characters are thirty bytes.
+    test.assert(u32_at(name + 16) == 30)
+    test.assert(ptr.read_word(name + 8) != 0)
+    let _ = libfreetype.ft_done_face(face)
+    let _ = libfreetype.ft_done_freetype(lib)
+    ptr.free(name)
+    ptr.free(tag)
+    ptr.free(count)
+    ptr.free(table)
+    ptr.free(length)
+    ptr.free(fslot)
+    ptr.free(font)
+    ptr.free(slot)
+
+@test
+fn test_the_fixed_point_arithmetic_rounds_the_way_freetype_does() [io, ffi]
+    test.case("FT_MulFix, FT_DivFix, FT_MulDiv, FT_RoundFix, FT_CeilFix, FT_FloorFix")
+    // Half of 1000, where 32768 is one half in 16.16.
+    test.assert(libfreetype.ft_mul_fix(1000, 32768) == 500)
+    // One divided by two, answered in 16.16.
+    test.assert(libfreetype.ft_div_fix(1, 2) == 32768)
+    // Three sevenths halved is 10.5, and the answer is rounded.
+    test.assert(libfreetype.ft_mul_div(3, 7, 2) == 11)
+    // One and a half rounds to two, in 16.16.
+    test.assert(libfreetype.ft_round_fix(98304) == 131072)
+    // Anything above one ceils to two.
+    test.assert(libfreetype.ft_ceil_fix(65537) == 131072)
+    // Anything below two floors to one.
+    test.assert(libfreetype.ft_floor_fix(131071) == 65536)
