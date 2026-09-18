@@ -5,6 +5,10 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.1.1 — 2026-09-18
+
+The documentation and comments in plain prose; no declaration changed.
+
 ## 0.1.0 — 2026-09-16
 
 The first release: fifty-four entry points of the FreeType C API, one
@@ -36,46 +40,40 @@ The first release: fifty-four entry points of the FreeType C API, one
     `FT_Get_Sfnt_Name_Count` and `FT_Get_Sfnt_Name`.
   - Fixed-point arithmetic: `FT_MulFix`, `FT_DivFix`, `FT_MulDiv`,
     `FT_RoundFix`, `FT_CeilFix` and `FT_FloorFix`.
-- `tests/libfreetype_tests.nv` — fourteen tests over the signatures.
+- `tests/libfreetype_tests.nv` — fourteen tests over the entry points.
   They call the C library, so they need FreeType installed. The suite
   carries its own 776-byte TrueType font as hex and loads it from
   memory, so thirteen of the fourteen read and write nothing.
 
-### The structures are the interface
+### The answers come out of the structures
 
 FreeType answers almost nothing through a return value. A face's glyph
 count, a glyph's metrics, the rendered bitmap and the outline are all
 fields of a record the library owns, and the handle is the address of
-that record. The offsets this package promises are in the README's
-"The rules a user needs" section, and they are the offsets of the
-`x86_64` System V layout that FreeType 2.13 compiles to.
+that record. This release promises the offsets of those fields. They
+are in the README's "The rules a user needs" section, and they are the
+offsets of the `x86_64` System V layout that FreeType 2.13 compiles
+to.
 
 The standard library reads eight bytes at a time. A field narrower
 than that is masked out of the word that contains it, and a signed one
 is sign-extended by hand. That is the cost of the arrangement, and the
 README's rule 4 is the recipe.
 
-### Where the effect rows fall
+### Where the effects fall
 
 A face keeps its font file open for its whole life and reads glyph and
-table data out of it on demand, so the twelve entry points that pull
-data through a face carry `[io, ffi]`. The other forty-two touch only
-memory the caller already holds and carry `[ffi]` alone, which is why
-`FT_New_Memory_Face` is an `[ffi]` call where `FT_New_Face` is not.
-
-### Not a `0.0.x` interface release
-
-An interface release is the shape whose every `pub fn` body is a
-`todo()`. Every `pub fn` here is an `@ffi` declaration with no body, so
-`novo pkg publish` reads the package as a release with bodies and
-refuses a `0.0.x` version for it. The first release of a bindings
-package is therefore `0.1.0`.
+table data out of it on demand, so the sixteen entry points that pull
+data through a face declare `[io, ffi]`. The other thirty-eight touch
+only memory the caller already holds and declare `[ffi]` alone, which
+is why `FT_New_Memory_Face` is an `[ffi]` call where `FT_New_Face` is
+not.
 
 ### Named as missing
 
 **`FT_Outline_Decompose`, and the whole callback half of FreeType.**
 It takes an `FT_Outline_Funcs` structure whose four members — move to,
-line to, conic to and cubic to — are C FUNCTION POINTERS, and a
+line to, conic to and cubic to — are C function pointers, and a
 novo-lang program cannot produce one. This is the call a program would
 normally use to walk a glyph's contours. A caller reads the points out
 of the `FT_Outline` record by hand instead: the point count, the tag
@@ -92,7 +90,7 @@ read and close members are function pointers. The two ordinary cases
 have their own entry points: `FT_New_Face` for a path and
 `FT_New_Memory_Face` for bytes already in memory.
 
-**`FT_New_Library` and the module interface.** `FT_New_Library` takes
+**`FT_New_Library` and `FT_Set_Debug_Hook`.** `FT_New_Library` takes
 an `FT_Memory`, a structure of allocator function pointers, and
 `FT_Set_Debug_Hook` takes a function pointer outright.
 `FT_Init_FreeType` builds a library with the default allocator and the
@@ -101,12 +99,11 @@ default modules.
 **The cache subsystem.** `FTC_Manager_New` takes a face requester
 callback, so the whole `FTC_` family is out.
 
-**The colour glyph interface.** `FT_Get_Color_Glyph_Paint` and the
-COLRv1 calls beside it pass an `FT_OpaquePaint` BY VALUE, and the
-novo-lang foreign function interface passes integers, floats and
-strings.
+**The colour glyph calls.** `FT_Get_Color_Glyph_Paint` and the COLRv1
+calls beside it pass an `FT_OpaquePaint` by value, and the novo-lang
+foreign function interface passes integers, floats and strings.
 
-**The variable font interface.** `FT_Get_MM_Var` answers an `FT_MM_Var`
+**The variable font calls.** `FT_Get_MM_Var` answers an `FT_MM_Var`
 whose axis and named-instance arrays are variable length, and
 `FT_Done_MM_Var`, `FT_Set_Var_Design_Coordinates` and
 `FT_Get_Var_Design_Coordinates` go with it. The whole family is left

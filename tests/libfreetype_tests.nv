@@ -8,7 +8,7 @@
 // font built for these tests with three glyphs — the substitute glyph,
 // a square mapped from U+0041 and a triangle mapped from U+0042 — and
 // it is loaded from memory, so every test but one reads and writes
-// nothing.  The one that does writes a file that is NOT a font under
+// nothing.  The one that does writes a file that is not a font under
 // `/tmp`, to see the error a face reports for it, and deletes it
 // again.
 
@@ -402,7 +402,8 @@ fn test_an_outline_answers_its_boxes_its_orientation_and_its_check() [io, ffi]
     test.assert(ptr.read_word(cbox + 16) == ptr.read_word(bbox + 16))
     test.assert(ptr.read_word(cbox + 16) > ptr.read_word(cbox))
     test.assert(ptr.read_word(cbox + 24) > ptr.read_word(cbox + 8))
-    // 1 is the TrueType fill, drawn clockwise.
+    // 1 is `FT_ORIENTATION_POSTSCRIPT`: the contours this glyph fills
+    // are the counter-clockwise ones.
     test.assert(libfreetype.ft_outline_get_orientation(outline) == 1)
     let _ = libfreetype.ft_done_face(face)
     let _ = libfreetype.ft_done_freetype(lib)

@@ -27,16 +27,16 @@
 // values that do need `as i32` before a comparison with a negative
 // number.
 //
-// The effect row says where the call goes.  A face keeps its font file
-// open for its whole life and reads glyph and table data out of it on
-// demand, so the entry points that pull data through a face carry
-// `[io, ffi]`.  The entry points that touch only memory the caller
-// already holds — the outline helpers, the bitmap helpers, the
-// character map lookups and the fixed-point arithmetic — carry `[ffi]`
-// alone.
+// The effects declared on an entry point say where the call goes.  A
+// face keeps its font file open for its whole life and reads glyph and
+// table data out of it on demand, so the entry points that pull data
+// through a face declare `[io, ffi]`.  The entry points that touch only
+// memory the caller already holds — the outline helpers, the bitmap
+// helpers, the character map lookups and the fixed-point arithmetic —
+// declare `[ffi]` alone.
 //
 // `FT_Outline_Decompose` is not here.  It takes an `FT_Outline_Funcs`
-// structure whose four members are C FUNCTION POINTERS, and a
+// structure whose four members are C function pointers, and a
 // novo-lang program cannot produce one.  The README's "What is not
 // included" section lists it with the rest.
 
@@ -80,19 +80,23 @@ fn ft_error_string(error_code: Int) -> Int [ffi]
 // `module_name` is a driver name such as `"truetype"` or `"cff"`,
 // `property_name` is the property, and `value` is the address of the
 // value to read it from — a slot holding a C `int` for the numeric
-// properties.  Answers 0 on success, 6 when the module is unknown and
-// 3 when the property is.
+// properties.  Answers 0 on success, 11 when the module is unknown and
+// 12 when the property is.
 pub @ffi(library = "freetype", symbol = "FT_Property_Set")
 fn ft_property_set(library: Int, module_name: Str, property_name: Str, value: Int) -> Int [ffi]
 
 // Open a font file and create a face from one of the fonts in it.
 //
-// `filepathname` is the path, `face_index` selects the font when the
-// file holds several, and -1 asks only for the number of faces without
-// creating one.  `aface` is the address of a slot the face handle is
-// written into.  Answers 0 on success, 1 when the file cannot be
-// opened, and 2 when it is not a font this build can read.  The file
-// stays open for the life of the face.
+// `filepathname` is the path, and `face_index` selects the font when
+// the file holds several.  `aface` is the address of a slot the face
+// handle is written into.  Answers 0 on success, 1 when the file
+// cannot be opened, and 2 when it is not a font this build can read.
+// The file stays open for the life of the face.
+//
+// A negative `face_index` asks whether the file is a font at all.  The
+// call still writes a face into the slot, and the only fields of that
+// face that mean anything are the number of fonts in the file and the
+// style flags.  It is released by `FT_Done_Face` like any other.
 pub @ffi(library = "freetype", symbol = "FT_New_Face")
 fn ft_new_face(library: Int, filepathname: Str, face_index: Int, aface: Int) -> Int [io, ffi]
 
@@ -163,7 +167,8 @@ fn ft_get_name_index(face: Int, glyph_name: Str) -> Int [io, ffi]
 //
 // `buffer` is the address of `buffer_max` bytes, and the name arrives
 // null-terminated.  Answers 0 on success, and 6 when the face carries
-// no glyph names.  Ask `FT_Has_PS_Glyph_Names` first.
+// no glyph names.  The error code is how a caller learns that the face
+// has none.
 pub @ffi(library = "freetype", symbol = "FT_Get_Glyph_Name")
 fn ft_get_glyph_name(face: Int, glyph_index: Int, buffer: Int, buffer_max: Int) -> Int [io, ffi]
 
@@ -214,7 +219,8 @@ fn ft_request_size(face: Int, req: Int) -> Int [io, ffi]
 // Select one of a face's fixed strike sizes by index.
 //
 // `strike_index` indexes the face's `available_sizes` array.  Answers
-// 0 on success and 23 when the face has no such strike.
+// 0 on success, 6 when the index is outside the strikes the face
+// carries, and 35 when the face carries no strikes at all.
 pub @ffi(library = "freetype", symbol = "FT_Select_Size")
 fn ft_select_size(face: Int, strike_index: Int) -> Int [io, ffi]
 
@@ -246,20 +252,23 @@ fn ft_load_char(face: Int, char_code: Int, load_flags: Int) -> Int [io, ffi]
 
 // Rasterise the outline in a glyph slot into the slot's bitmap.
 //
-// `render_mode` is 0 for eight-bit grey, 1 for one bit per pixel, 2
-// and 3 for the horizontal and vertical subpixel modes and 5 for the
-// signed distance field.  Answers 0 on success, and 6 when the slot
-// holds no outline.  The bitmap is at offset 152 of the slot.
+// `render_mode` is 0 for eight-bit grey, 1 for the same eight-bit grey
+// under the light hinting target, 2 for one bit per pixel, 3 and 4 for
+// the horizontal and vertical subpixel modes and 5 for the signed
+// distance field.  Answers 0 on success, and 19 when the slot holds
+// nothing this library can rasterise.  A slot that already holds a
+// bitmap answers 0 and is left alone.  The bitmap is at offset 152 of
+// the slot.
 pub @ffi(library = "freetype", symbol = "FT_Render_Glyph")
 fn ft_render_glyph(slot: Int, render_mode: Int) -> Int [ffi]
 
 // Get the kerning between two glyphs.
 //
-// `kern_mode` is 0 for a scaled 26.6 answer, 1 for a scaled answer
-// rounded to whole pixels and 2 for unscaled font units.  `akerning`
-// is the address of a 16-byte record the x and y are written into.
-// Answers 0 on success, and writes two zeroes when the face carries no
-// kerning table.
+// `kern_mode` is 0 for a scaled answer grid-fitted to whole pixels and
+// carried in 26.6, 1 for the same scaling without the grid fitting,
+// and 2 for unscaled font units.  `akerning` is the address of a
+// 16-byte record the x and y are written into.  Answers 0 on success,
+// and writes two zeroes when the face carries no kerning table.
 pub @ffi(library = "freetype", symbol = "FT_Get_Kerning")
 fn ft_get_kerning(face: Int, left_glyph: Int, right_glyph: Int, kern_mode: Int,
                   akerning: Int) -> Int [io, ffi]
@@ -317,7 +326,9 @@ fn ft_outline_transform(outline: Int, matrix: Int) [ffi]
 //
 // `strength` is in 26.6 units and the outline grows by it in both
 // directions, so a glyph gets `strength` wider and `strength` taller.
-// The outline must be oriented correctly or the effect is inverted.
+// The left and the bottom border stay where they are.  This call reads
+// the outline's own fill orientation, so a clockwise contour and a
+// counter-clockwise one both grow.
 pub @ffi(library = "freetype", symbol = "FT_Outline_Embolden")
 fn ft_outline_embolden(outline: Int, strength: Int) -> Int [ffi]
 
@@ -354,9 +365,11 @@ fn ft_outline_get_bbox(outline: Int, abbox: Int) -> Int [ffi]
 
 // Get the fill orientation of an outline.
 //
-// Answers 1 when the outline is filled clockwise, which is the
-// TrueType convention, 2 when it is filled counter-clockwise, which is
-// the PostScript one, and 0 when the outline is empty.
+// Answers 0, `FT_ORIENTATION_TRUETYPE`, when the filled contours are
+// the clockwise ones.  Answers 1, `FT_ORIENTATION_POSTSCRIPT`, when
+// the filled contours are the counter-clockwise ones.  Answers 2,
+// `FT_ORIENTATION_NONE`, when parts of the outline disagree.  An empty
+// outline answers 0.
 pub @ffi(library = "freetype", symbol = "FT_Outline_Get_Orientation")
 fn ft_outline_get_orientation(outline: Int) -> Int [ffi]
 
@@ -412,10 +425,11 @@ fn ft_bitmap_done(library: Int, bitmap: Int) -> Int [ffi]
 // Read one SFNT table, or ask how long it is.
 //
 // `tag` is the four-byte table tag read as a big-endian number, and 0
-// asks for the whole font file.  With `buffer` 0 the length is written
-// into the slot at `length` and nothing is copied; with a buffer, at
-// most `length` bytes from `offset` are copied into it.  Answers 8
-// when the face is not an SFNT face and 138 when the table is absent.
+// asks for the whole font file.  The slot at `length` decides what the
+// call does.  A slot holding 0 receives the length of the table and
+// nothing is copied, whatever `buffer` is.  A slot holding a count
+// copies that many bytes from `offset` into `buffer`.  Answers 8 when
+// the face is not an SFNT face and 142 when the table is absent.
 pub @ffi(library = "freetype", symbol = "FT_Load_Sfnt_Table")
 fn ft_load_sfnt_table(face: Int, tag: Int, offset: Int, buffer: Int, length: Int) -> Int [io, ffi]
 
@@ -439,7 +453,7 @@ fn ft_get_sfnt_name_count(face: Int) -> Int [io, ffi]
 // `aname` is the address of a 24-byte record receiving four two-byte
 // identifiers — platform, encoding, language and name — then the
 // address of the bytes at offset 8 and their length at offset 16.  The
-// bytes belong to the face and are NOT null-terminated, and their
+// bytes belong to the face and are not null-terminated, and their
 // encoding is whatever the platform and encoding identifiers say.
 pub @ffi(library = "freetype", symbol = "FT_Get_Sfnt_Name")
 fn ft_get_sfnt_name(face: Int, idx: Int, aname: Int) -> Int [io, ffi]

@@ -9,12 +9,12 @@ Android, and in most PDF and browser rendering stacks. This package
 declares fifty-four of that library's entry points to novo-lang, one
 declaration each.
 
-**Status: a binding, not a port.** Every function in this package is a
-declaration of a function in FreeType. The package contains no logic of
-its own, and it does nothing without the C library installed. The
-fifty-four entry points are the ones a program needs to open a font,
-measure it, load a glyph and rasterise it; the section "What is not
-included" says what a program still cannot do with them alone.
+Every function here is a declaration of a function in FreeType. The
+package contains no logic of its own, and it does nothing without the C
+library installed. The fifty-four entry points are the ones a program
+needs to open a font, measure it, load a glyph and rasterise it. The
+section "What is not included" says what a program cannot do with them
+alone.
 
 ## What it is
 
@@ -200,8 +200,10 @@ answer the same four numbers.
    | 2 | `FT_Err_Unknown_File_Format` | the file opened and is not a font |
    | 6 | `FT_Err_Invalid_Argument` | the index, the glyph or the property is not there |
    | 8 | `FT_Err_Invalid_Table` | the face is not an SFNT face |
+   | 19 | `FT_Err_Cannot_Render_Glyph` | the glyph slot holds nothing that can be rasterised |
    | 23 | `FT_Err_Invalid_Pixel_Size` | the face has no outlines and no strike of that size |
-   | 138 | `FT_Err_Table_Missing` | the SFNT table is not in this font |
+   | 35 | `FT_Err_Invalid_Face_Handle` | the face carries no strikes at all |
+   | 142 | `FT_Err_Table_Missing` | the SFNT table is not in this font |
 
 6. **`FT_Error_String` answers 0 on most builds.** The table is
    compiled in only with `FT_CONFIG_OPTION_ERROR_STRINGS`, and the
@@ -281,17 +283,19 @@ answer the same four numbers.
     offset 8 and the length at offset 16, and the platform and
     encoding identifiers at offsets 0 and 2 say how to read the bytes.
     Platform 3 with encoding 1 is UTF-16 big-endian.
-17. **`FT_Load_Sfnt_Table` with a buffer of 0 answers the length.**
-    Call it twice: once to size the buffer, once to fill it.
-    `FT_Sfnt_Table_Info` with a tag of 0 answers the number of tables
-    the same way.
+17. **`FT_Load_Sfnt_Table` with a length slot holding 0 answers the
+    length.** The slot decides what the call does, and a buffer passed
+    beside a slot holding 0 is not written to. Call it twice: once to
+    size the buffer, once to fill it. `FT_Sfnt_Table_Info` with a tag
+    of 0 answers the number of tables the same way.
 18. **The load flags are a bit set.** 0 is the default. 1 skips the
     scaling and answers design units, 2 skips the hinter, 4 renders in
     the same call and 8 ignores the bitmap strikes.
-19. **The render modes are 0 for eight-bit grey, 1 for one bit per
-    pixel, 2 and 3 for the horizontal and vertical subpixel modes and
-    5 for the signed distance field.** The pixel mode the bitmap
-    reports is 1 for monochrome and 2 for grey.
+19. **The render modes are 0 for eight-bit grey, 1 for that same grey
+    under the light hinting target, 2 for one bit per pixel, 3 and 4
+    for the horizontal and vertical subpixel modes and 5 for the
+    signed distance field.** The pixel mode the bitmap reports is 1
+    for monochrome and 2 for grey.
 20. **Glyph index 0 is the substitute glyph, not an error.**
     `FT_Get_Char_Index` and `FT_Get_Name_Index` answer 0 for something
     the font does not have, and loading glyph 0 succeeds.
@@ -316,9 +320,9 @@ answer the same four numbers.
   default allocator and the default modules.
 - **The cache subsystem.** Every `FTC_` entry point hangs off
   `FTC_Manager_New`, which takes a face requester callback.
-- **The colour glyph interface.** `FT_Get_Color_Glyph_Paint` and the
+- **The colour glyph calls.** `FT_Get_Color_Glyph_Paint` and the
   COLRv1 calls beside it pass an `FT_OpaquePaint` by value.
-- **The variable font interface.** `FT_Get_MM_Var` answers a structure
+- **The variable font calls.** `FT_Get_MM_Var` answers a structure
   whose axis and named-instance arrays are variable length. The whole
   family is left out of the first release.
 - **The stroker.** The fifteen `FT_Stroker_` entry points turn an
@@ -350,8 +354,8 @@ chooses; the two are used together and neither replaces the other.
 
 ## Tests
 
-`tests/libfreetype_tests.nv` holds fourteen tests written against the
-signatures. They call the C library, so `novo test` needs FreeType
+`tests/libfreetype_tests.nv` holds fourteen tests over the fifty-four
+entry points. They call the C library, so `novo test` needs FreeType
 installed and linkable:
 
 ```
@@ -380,25 +384,6 @@ calls, and FreeType's own rounding in all six fixed-point calls.
 They are the `ptr.read_str` copies the tests make out of the face's own
 strings; `ptr.read_str` is declared untracked, which is a defect in the
 toolchain and not in this package.
-
-## Implementation status
-
-| Group | State |
-| --- | --- |
-| The library | Complete for the default allocator and the default modules. |
-| The face | Complete for a path and for memory. |
-| Character maps | Complete. |
-| Sizes | Complete for all four ways of setting one. |
-| Loading and rendering | Complete for the glyph slot. |
-| Outlines | Complete except for decomposition and direct rasterisation. |
-| Bitmaps | Complete. |
-| SFNT tables | Complete for the raw tables and the name records. |
-| Fixed point | Complete. |
-| Outline decomposition | Absent. It needs four C function pointers. |
-| The cache subsystem | Absent. It needs a face requester callback. |
-| Colour glyphs | Absent. COLRv1 passes a structure by value. |
-| Variable fonts | Absent. Left out of the first release. |
-| The stroker | Absent. Left out of the first release. |
 
 ## Licence
 
