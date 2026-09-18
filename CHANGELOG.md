@@ -9,6 +9,31 @@ with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
 The documentation and comments in plain prose; no declaration changed.
 
+### Corrected against the FreeType 2.13 reference
+
+- `FT_Property_Set` answers 11, `FT_Err_Missing_Module`, for an
+  unknown module and 12, `FT_Err_Missing_Property`, for an unknown
+  property.
+- `FT_Outline_Get_Orientation` answers 0 for `FT_ORIENTATION_TRUETYPE`,
+  1 for `FT_ORIENTATION_POSTSCRIPT` and 2 for `FT_ORIENTATION_NONE`.
+  An empty outline answers 0.
+- The render modes are 0 normal, 1 light, 2 one bit per pixel, 3 and 4
+  the two subpixel modes and 5 the signed distance field.
+- `FT_Render_Glyph` answers 19, `FT_Err_Cannot_Render_Glyph`, for a
+  slot that holds no outline.
+- `FT_Get_Kerning` mode 0 answers a grid-fitted distance in 26.6 and
+  mode 1 one that is not grid-fitted. The two were the other way
+  round.
+- `FT_Select_Size` answers 35 on a scalable face with no strikes and 6
+  for an index outside the strikes a face does carry.
+- `FT_Err_Table_Missing` is 142.
+- `FT_Load_Sfnt_Table` measures the table rather than copying it when
+  the length slot holds 0, whatever the buffer argument is.
+- `FT_New_Face` with a negative face index writes a face handle, and
+  that face must still be released with `FT_Done_Face`.
+- Sixteen of the fifty-four declarations carry `[io, ffi]`, not
+  twelve.
+
 ## 0.1.0 — 2026-09-16
 
 The first release: fifty-four entry points of the FreeType C API, one
